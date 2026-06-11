@@ -1,9 +1,7 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.39.3";
-import * as pdfjsLib from "https://esm.sh/pdfjs-dist@3.11.174/build/pdf.mjs";
+import { getDocumentProxy, extractText } from "npm:unpdf@0.12.1";
 import { chunkText } from "./chunking.ts";
-
-pdfjsLib.GlobalWorkerOptions.workerSrc = "https://esm.sh/pdfjs-dist@3.11.174/build/pdf.worker.mjs";
 
 const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
 const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
@@ -40,8 +38,10 @@ serve(async (req) => {
     }
 
     const arrayBuffer = await fileData.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: arrayBuffer });
-    const pdfDocument = await loadingTask.promise;
+    const uint8Array = new Uint8Array(arrayBuffer);
+    
+    // Use unpdf's Edge-compatible proxy
+    const pdfDocument = await getDocumentProxy(uint8Array);
     const numPages = pdfDocument.numPages;
 
     // Backend Validation 2: Max 300 pages
@@ -49,20 +49,10 @@ serve(async (req) => {
       throw new Error("Document exceeds 300 page limit.");
     }
 
-    console.log(`[Processing] PDF loaded. Total pages: ${numPages}`);
+    console.log(`[Processing] PDF loaded via unpdf. Total pages: ${numPages}`);
 
-    // Refactor: Extract page-by-page into an array instead of string concatenation
-    const pageTexts: string[] = [];
-
-    for (let i = 1; i <= numPages; i++) {
-      const page = await pdfDocument.getPage(i);
-      const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(" ");
-      pageTexts.push(pageText);
-    }
-
-    // Join everything at the very end to save memory
-    const rawText = pageTexts.join("\n");
+    // Extract text safely without canvas/Node dependencies
+    const { text: rawText } = await extractText(pdfDocument, { mergePages: true });
 
     const cleanText = rawText
       .replace(/\u0000/g, '') 
